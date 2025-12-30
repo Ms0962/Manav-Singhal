@@ -1,0 +1,26 @@
+
+{
+  "short_name": "VoltCalc",
+  "name": "VoltCalc - Smart Electricity Billing",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2991/2991148.png",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/png"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2991/2991148.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2991/2991148.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a"
+}
