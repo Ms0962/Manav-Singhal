@@ -1,522 +1,409 @@
 
-import React, { useState, useRef, useEffect } from 'react';
-import { AdminConfig, Room, BillingRecord } from '../types';
-import { storage } from '../services/storageService';
-import { biometricService } from '../services/biometricService';
-import HistoryList from './HistoryList';
+import React, { useState } from 'react';
+import { AdminConfig, Room, BillingRecord, PartnerAccess } from '../types';
 import { 
-  ShieldCheck, Lock, Plus, Trash2, List, Zap, Home, Receipt, Wallet, 
-  Edit3, Check, Users, Key, Download, Upload, AlertTriangle, RefreshCcw, LogOut,
-  LayoutDashboard, Settings as SettingsIcon, Fingerprint, ScanFace, Smartphone, Palette, Type, Image as ImageIcon,
-  Smartphone as InstallIcon, Save
+  Users, ShieldCheck, Globe, Palette,
+  Trash2, Plus, Lock, Settings,
+  Type, Coins, ShieldAlert, X, Check,
+  RefreshCw, Database, CloudUpload, Link,
+  AlertCircle
 } from 'lucide-react';
 
 interface AdminPanelProps {
   config: AdminConfig;
   rooms: Room[];
   records: BillingRecord[];
+  currentUserRole: 'owner' | 'admin' | 'viewer';
   onUpdateConfig: (newConfig: Partial<AdminConfig>) => void;
-  onAddRoom: (name: string, initialReading?: number, rate?: number, rent?: number) => void;
+  onAddRoom: (name: string, initial?: number) => void;
   onDeleteRoom: (id: string) => void;
-  onDeleteRecord: (id: string) => void;
-  isAuthenticated: boolean;
-  onAuthenticate: (status: boolean) => void;
-  onInstallApp?: () => void;
 }
 
-type AdminTab = 'overview' | 'units' | 'ledger' | 'branding' | 'security';
-
 const AdminPanel: React.FC<AdminPanelProps> = ({ 
-  rooms, records, config, onAddRoom, onDeleteRoom, onDeleteRecord, isAuthenticated, onAuthenticate, onUpdateConfig, onInstallApp 
+  rooms, config, currentUserRole, onAddRoom, onDeleteRoom, onUpdateConfig 
 }) => {
-  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState<'users' | 'units' | 'settings'>('units');
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [pinAttempt, setPinAttempt] = useState('');
+  const [pinError, setPinError] = useState(false);
   
-  // Biometric Management
-  const [isBioSupported, setIsBioSupported] = useState(false);
-  const [isBioEnabled, setIsBioEnabled] = useState(localStorage.getItem('voltcalc_bio_enabled') === 'true');
-
-  useEffect(() => {
-    biometricService.checkAvailability().then(setIsBioSupported);
-  }, []);
-
-  const toggleBiometrics = async () => {
-    if (isBioEnabled) {
-      localStorage.removeItem('voltcalc_bio_enabled');
-      localStorage.removeItem('voltcalc_remembered_key');
-      setIsBioEnabled(false);
-      setSecurityMsg({ text: "Biometric access revoked.", type: 'success' });
-    } else {
-      const registered = await biometricService.register("Admin Vault");
-      if (registered) {
-        localStorage.setItem('voltcalc_bio_enabled', 'true');
-        localStorage.setItem('voltcalc_remembered_key', config.adminPassword);
-        setIsBioEnabled(true);
-        setSecurityMsg({ text: "Biometric link established.", type: 'success' });
-      } else {
-        setSecurityMsg({ text: "Hardware verification failed.", type: 'error' });
-      }
-    }
-  };
-
-  // Branding States
-  const [tempAppName, setTempAppName] = useState(config.appName || 'VOLTCALC');
-  const [logoPreview, setLogoPreview] = useState<string | null>(config.appLogo || null);
-  const logoInputRef = useRef<HTMLInputElement>(null);
-
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const base64 = ev.target?.result as string;
-      setLogoPreview(base64);
-      onUpdateConfig({ appLogo: base64 });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Create Unit State
-  const [newRoomName, setNewRoomName] = useState('');
-  const [initialReading, setInitialReading] = useState<number>(0);
-  const [initialRate, setInitialRate] = useState<number>(8);
-  const [initialRent, setInitialRent] = useState<number>(500);
-
-  // Editing Room State
-  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
-  const [editRoomData, setEditRoomData] = useState<Partial<Room>>({});
+  const [newPartnerId, setNewPartnerId] = useState('');
+  const [newPartnerPin, setNewPartnerPin] = useState('');
+  const [newPartnerRole, setNewPartnerRole] = useState<'admin' | 'viewer'>('viewer');
   
-  // Security States
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [securityMsg, setSecurityMsg] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isAddingMeter, setIsAddingMeter] = useState(false);
+  const [newMeterName, setNewMeterName] = useState('');
+  const [newMeterInitial, setNewMeterInitial] = useState(0);
 
-  const formatCurrency = (val: number) => {
-    return val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleCreateMeter = () => {
+    if (newMeterName.trim()) {
+      onAddRoom(newMeterName, newMeterInitial);
+      setNewMeterName('');
+      setNewMeterInitial(0);
+      setIsAddingMeter(false);
+    }
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordInput === config.adminPassword) {
-      onAuthenticate(true);
-      setError('');
+    if (pinAttempt === config.pin) {
+      setIsUnlocked(true);
+      setPinError(false);
     } else {
-      setError('Incorrect master key.');
+      setPinError(true);
+      setPinAttempt('');
+      setTimeout(() => setPinError(false), 2000);
     }
   };
 
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newRoomName.trim()) {
-      onAddRoom(newRoomName.trim(), initialReading, initialRate, initialRent);
-      setNewRoomName('');
-      setInitialReading(0);
+  const handleAddPartner = () => {
+    if (currentUserRole !== 'owner') return;
+    if (newPartnerId && newPartnerPin.length === 4) {
+      const newPartner: PartnerAccess = {
+        id: newPartnerId,
+        name: newPartnerId,
+        pin: newPartnerPin,
+        role: newPartnerRole
+      };
+      onUpdateConfig({ partners: [...config.partners, newPartner] });
+      setNewPartnerId('');
+      setNewPartnerPin('');
     }
   };
 
-  const handleSaveEdit = async () => {
-    if (!editingRoomId) return;
-    // Fix: Using Object.assign instead of a multi-spread to resolve the "Spread types may only be created from object types" error when merging an interface with its partial.
-    const updatedRooms = rooms.map(r => r.id === editingRoomId ? Object.assign({}, r, editRoomData) : r);
-    await storage.saveVault(config.adminPassword, updatedRooms, records);
-    setEditingRoomId(null);
-    window.location.reload();
-  };
+  const handleSyncToGoogleSheets = async () => {
+    if (!config.googleSheetUrl) return;
+    setIsSyncing(true);
+    
+    try {
+      const payload = {
+        timestamp: new Date().toISOString(),
+        appName: config.appName,
+        ownerId: config.userId,
+        recoveryEmail: config.recoveryEmail,
+        pin: config.pin,
+        totalMeters: rooms.length,
+        totalRecords: (config as any).recordsCount || 0,
+        action: 'manual_sync'
+      };
 
-  const themeColors: AdminConfig['themeColor'][] = ['indigo', 'rose', 'emerald', 'amber', 'violet', 'cyan'];
-
-  const getThemeBg = (color?: string) => {
-    switch(color) {
-      case 'rose': return 'bg-rose-600';
-      case 'emerald': return 'bg-emerald-600';
-      case 'amber': return 'bg-amber-600';
-      case 'violet': return 'bg-violet-600';
-      case 'cyan': return 'bg-cyan-600';
-      default: return 'bg-indigo-600';
+      await fetch(config.googleSheetUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      alert("ID and PIN successfully saved to Google Sheets!");
+    } catch (err) {
+      console.error("Sync Error:", err);
+      alert("Cloud Sync failed. Verify your Webhook URL.");
+    } finally {
+      setIsSyncing(false);
     }
   };
 
-  if (!isAuthenticated) {
+  const isOwner = currentUserRole === 'owner';
+  const isRestricted = currentUserRole === 'viewer';
+
+  const themes: Array<{id: AdminConfig['themeColor'], color: string}> = [
+    { id: 'indigo', color: 'bg-indigo-600' },
+    { id: 'rose', color: 'bg-rose-600' },
+    { id: 'emerald', color: 'bg-emerald-600' },
+    { id: 'amber', color: 'bg-amber-600' },
+    { id: 'violet', color: 'bg-violet-600' },
+    { id: 'cyan', color: 'bg-cyan-600' },
+  ];
+
+  if (isOwner && (activeTab === 'settings' || activeTab === 'users') && !isUnlocked) {
     return (
-      <div className="max-w-md mx-auto py-24">
-        <div className="glass p-12 rounded-[3rem] shadow-2xl border border-white/5 text-center">
-          <div className={`w-20 h-20 ${getThemeBg(config.themeColor)} rounded-[2rem] flex items-center justify-center mx-auto mb-10 shadow-xl`}>
-            <Lock className="w-8 h-8 text-white" />
+      <div className="flex items-center justify-center py-20 animate-in fade-in zoom-in duration-500">
+        <div className="glass max-w-sm w-full p-10 rounded-[3.5rem] border border-indigo-500/20 text-center shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-indigo-500 animate-pulse" />
+          <div className="w-16 h-16 bg-indigo-600/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <Lock className="w-8 h-8 text-indigo-400" />
           </div>
-          <h2 className="text-3xl font-black text-white mb-4 tracking-tight">Admin Console</h2>
-          <p className="text-slate-500 font-medium mb-10">Access restricted to vault owners.</p>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <input
-              type="password"
-              placeholder="System Key"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              className="w-full px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl focus:ring-4 focus:ring-indigo-600/30 outline-none transition-all text-center font-bold text-white"
+          <h3 className="text-2xl font-black text-white italic mb-2">Settings Locked</h3>
+          <p className="text-slate-500 text-[9px] font-black uppercase tracking-widest mb-8">Re-verify Master PIN to continue</p>
+          
+          <form onSubmit={handleVerifyPin} className="space-y-4">
+            <input 
+              autoFocus
+              type="password" 
+              maxLength={4} 
+              placeholder="••••" 
+              value={pinAttempt}
+              onChange={(e) => setPinAttempt(e.target.value.replace(/\D/g, ''))}
+              className={`w-full p-4 bg-slate-950 border rounded-2xl text-center text-3xl font-black tracking-[0.5em] transition-all outline-none ${pinError ? 'border-red-500 animate-shake' : 'border-white/5 focus:border-indigo-500/50'}`}
             />
-            {error && <p className="text-red-500 text-[10px] font-black uppercase tracking-widest">{error}</p>}
-            <button type="submit" className="w-full py-4 bg-white text-slate-900 font-black rounded-2xl active:scale-95 transition-all text-lg hover:bg-slate-200">Decrypt Access</button>
+            {pinError && <p className="text-red-500 text-[9px] font-black uppercase tracking-widest">Invalid Owner PIN</p>}
+            <button type="submit" className="w-full py-5 bg-indigo-600 text-white font-black rounded-3xl shadow-lg active:scale-95 transition-all">Unlock Panel</button>
+            <button type="button" onClick={() => setActiveTab('units')} className="text-slate-600 text-[10px] font-black uppercase tracking-widest mt-4">Abort & Return</button>
           </form>
         </div>
       </div>
     );
   }
 
-  const totalCollected = records.reduce((acc, r) => acc + r.totalAmount, 0);
-
   return (
-    <div className="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="flex bg-slate-900/50 p-1 rounded-2xl border border-white/5 h-fit overflow-x-auto no-scrollbar">
-          {[
-            { id: 'overview', icon: LayoutDashboard, label: 'Stats' },
-            { id: 'units', icon: Home, label: 'Units' },
-            { id: 'ledger', icon: List, label: 'Ledger' },
-            { id: 'branding', icon: Palette, label: 'Branding' },
-            { id: 'security', icon: Key, label: 'Security' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as AdminTab)}
-              className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all text-sm whitespace-nowrap ${activeTab === tab.id ? `${getThemeBg(config.themeColor)} text-white shadow-xl` : 'text-slate-500 hover:text-white'}`}
-            >
-              <tab.icon className="w-4 h-4" />
-              <span>{tab.label}</span>
-            </button>
-          ))}
-        </div>
-        
-        <button onClick={() => onAuthenticate(false)} className="px-5 py-2.5 bg-white/5 text-slate-500 text-xs font-black rounded-xl hover:text-red-500 hover:bg-red-500/5 transition-all uppercase tracking-widest flex items-center gap-2 border border-white/5">
-          <LogOut className="w-4 h-4" /> End Session
-        </button>
+    <div className="space-y-10 animate-in fade-in slide-in-from-bottom">
+      <div className="flex bg-slate-900/50 p-1 rounded-2xl border border-white/5 w-fit overflow-x-auto no-scrollbar">
+        {[
+          { id: 'settings', icon: Settings, label: 'Global', hidden: !isOwner },
+          { id: 'users', icon: Users, label: 'Partners', hidden: !isOwner },
+          { id: 'units', icon: ShieldCheck, label: 'Meters', hidden: false },
+        ].filter(t => !t.hidden).map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id as any)}
+            className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all text-[10px] uppercase tracking-widest whitespace-nowrap ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
+          >
+            <tab.icon className="w-4 h-4" /> <span>{tab.label}</span>
+          </button>
+        ))}
       </div>
 
-      {activeTab === 'overview' && (
-        <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4">
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="glass p-8 rounded-[2.5rem] border border-white/5 flex items-center gap-6 group">
-              <div className={`bg-white/5 p-5 rounded-3xl text-slate-400 group-hover:${getThemeBg(config.themeColor)} group-hover:text-white transition-all duration-500`}>
-                <Users className="w-8 h-8" />
-              </div>
-              <div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Meters Registered</p>
-                <h4 className="text-4xl font-black text-white tabular-nums">{rooms.length}</h4>
-              </div>
+      {!isOwner && activeTab !== 'units' && (
+        <div className="glass p-10 rounded-[3rem] border border-white/5 text-center flex flex-col items-center gap-4">
+           <ShieldAlert className="w-12 h-12 text-amber-500" />
+           <h3 className="text-xl font-black text-white">Access Restricted</h3>
+           <p className="text-slate-500 text-sm max-w-sm">User management and global configuration are locked to the Primary Vault Admin.</p>
+        </div>
+      )}
+
+      {activeTab === 'settings' && isOwner && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="glass p-10 rounded-[3.5rem] border border-white/5 space-y-8">
+            <div className="flex items-center gap-3 mb-2">
+              <Settings className="w-6 h-6 text-indigo-400" />
+              <h3 className="text-2xl font-black text-white italic">App Configuration</h3>
             </div>
-            <div className="glass p-8 rounded-[2.5rem] border border-white/5 flex items-center gap-6 group">
-              <div className="bg-white/5 p-5 rounded-3xl text-slate-400 group-hover:bg-emerald-600 group-hover:text-white transition-all duration-500">
-                <Receipt className="w-8 h-8" />
+            
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <Type className="w-3 h-3" /> Application Name
+                </label>
+                <input 
+                  type="text" 
+                  value={config.appName} 
+                  onChange={(e) => onUpdateConfig({ appName: e.target.value })} 
+                  className="w-full px-6 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white font-bold focus:border-indigo-500/50 outline-none" 
+                />
               </div>
-              <div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Total Bills</p>
-                <h4 className="text-4xl font-black text-white tabular-nums">{records.length}</h4>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <Coins className="w-3 h-3" /> Currency Symbol
+                </label>
+                <input 
+                  type="text" 
+                  value={config.currencySymbol} 
+                  onChange={(e) => onUpdateConfig({ currencySymbol: e.target.value })} 
+                  className="w-full px-6 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white font-bold focus:border-indigo-500/50 outline-none" 
+                />
               </div>
-            </div>
-            <div className={`${getThemeBg(config.themeColor)} p-8 rounded-[2.5rem] shadow-2xl flex items-center gap-6 group relative overflow-hidden`}>
-              <div className="absolute right-0 top-0 p-8 opacity-10 rotate-12 group-hover:scale-150 transition-transform duration-700"><Wallet className="w-32 h-32 text-white" /></div>
-              <div className="bg-white/20 p-5 rounded-3xl text-white relative z-10"><Wallet className="w-8 h-8" /></div>
-              <div className="relative z-10">
-                <p className="text-[10px] font-black opacity-60 uppercase tracking-widest mb-1 text-white">Revenue Stream</p>
-                <div className="flex items-baseline gap-1.5 text-white">
-                  <span className="text-xs font-bold">{config.currencySymbol}</span>
-                  <h4 className="text-4xl font-black tracking-tighter tabular-nums">{formatCurrency(totalCollected)}</h4>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <Palette className="w-3 h-3" /> System Theme
+                </label>
+                <div className="flex flex-wrap gap-3">
+                  {themes.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => onUpdateConfig({ themeColor: t.id })}
+                      className={`w-10 h-10 rounded-full ${t.color} border-4 transition-all ${config.themeColor === t.id ? 'border-white scale-110 shadow-lg' : 'border-transparent opacity-40 hover:opacity-100'}`}
+                    />
+                  ))}
                 </div>
               </div>
             </div>
-          </section>
+          </div>
 
-          <div className="glass p-10 rounded-[3rem] border border-white/5">
-            <h3 className="text-xl font-black text-white mb-6 flex items-center gap-2">
-              <SettingsIcon className="w-5 h-5 text-indigo-500" /> Regional Settings
-            </h3>
-            <div className="max-w-xs">
-              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Currency Symbol</label>
-              <input 
-                type="text" 
-                value={config.currencySymbol} 
-                onChange={(e) => onUpdateConfig({ currencySymbol: e.target.value })}
-                className="w-full px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl text-white font-bold text-center uppercase"
-              />
+          <div className="space-y-8">
+            <div className="glass p-10 rounded-[3.5rem] border border-indigo-500/10 space-y-6">
+              <div className="flex items-center gap-3">
+                <Database className="w-6 h-6 text-emerald-400" />
+                <h3 className="text-xl font-black text-white">Cloud Backup (Google Sheets)</h3>
+              </div>
+              <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest leading-relaxed">
+                Automatically saves your Access ID and Master PIN to your private Google Sheet.
+              </p>
+              
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-2 ml-2">
+                  <Link className="w-3 h-3" /> Webhook URL
+                </label>
+                <input 
+                  type="url" 
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  value={config.googleSheetUrl}
+                  onChange={(e) => onUpdateConfig({ googleSheetUrl: e.target.value })}
+                  className="w-full px-5 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white text-xs font-mono outline-none focus:border-emerald-500/30"
+                />
+              </div>
+
+              <div className="bg-amber-500/10 p-4 rounded-2xl border border-amber-500/20 flex items-start gap-3">
+                <AlertCircle className="w-4 h-4 text-amber-500 mt-1 flex-shrink-0" />
+                <p className="text-[8px] text-amber-200 font-black uppercase tracking-widest leading-normal">
+                  Your ID and Password are sent to this URL for safe cloud storage. Make sure your Apps Script is set to 'Anyone' can access.
+                </p>
+              </div>
+
+              <button 
+                onClick={handleSyncToGoogleSheets}
+                disabled={!config.googleSheetUrl || isSyncing}
+                className={`w-full py-5 rounded-3xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-3 transition-all ${isSyncing ? 'bg-slate-800 text-slate-500' : 'bg-emerald-600 text-white shadow-xl hover:bg-emerald-500 shadow-emerald-900/20 active:scale-95'}`}
+              >
+                {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CloudUpload className="w-4 h-4" />}
+                {isSyncing ? 'Synchronizing Credentials...' : 'Save ID & PIN to Cloud'}
+              </button>
+            </div>
+
+            <div className="glass p-8 rounded-[3rem] border border-white/5 flex items-center gap-4">
+              <div className="bg-indigo-500/10 p-4 rounded-2xl"><Globe className="w-6 h-6 text-indigo-400" /></div>
+              <div>
+                <h4 className="text-sm font-black text-white uppercase tracking-tight">Security Status</h4>
+                <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">
+                  {config.googleSheetUrl ? 'Cloud Backup Active' : 'Local Storage Only'}
+                </p>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {activeTab === 'branding' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 animate-in fade-in slide-in-from-bottom-4">
-          <div className="glass p-10 rounded-[3rem] border border-white/5 space-y-10">
-            <h3 className="text-2xl font-black text-white flex items-center gap-3">
-              <Palette className="w-6 h-6 text-indigo-500" /> Identity Design
-            </h3>
-            
-            <div className="space-y-6">
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 px-1">Application Name</label>
-                <div className="flex gap-4">
-                  <input 
-                    type="text" 
-                    value={tempAppName}
-                    onChange={(e) => setTempAppName(e.target.value)}
-                    className="flex-grow px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl text-white font-bold"
-                  />
-                  <button 
-                    onClick={() => onUpdateConfig({ appName: tempAppName })}
-                    className={`px-6 ${getThemeBg(config.themeColor)} text-white rounded-2xl font-black hover:opacity-90 active:scale-95 transition-all`}
-                  >
-                    Save
-                  </button>
-                </div>
+      {activeTab === 'users' && isOwner && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="glass p-10 rounded-[3.5rem] border border-white/5 space-y-8">
+            <h3 className="text-2xl font-black text-white italic">Add Shared Access</h3>
+            <p className="text-sm text-slate-500">Authorized partners can access specific parts of this vault.</p>
+            <div className="space-y-4">
+              <input type="text" placeholder="Partner Access ID" value={newPartnerId} onChange={(e) => setNewPartnerId(e.target.value)} className="w-full px-6 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white font-bold" />
+              <input type="password" maxLength={4} placeholder="Partner 4-Digit PIN" value={newPartnerPin} onChange={(e) => setNewPartnerPin(e.target.value.replace(/\D/g, ''))} className="w-full px-6 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white font-bold text-center" />
+              
+              <div className="flex items-center gap-2 p-2 bg-slate-950 rounded-2xl border border-white/5">
+                <button 
+                  onClick={() => setNewPartnerRole('viewer')}
+                  className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${newPartnerRole === 'viewer' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}
+                >
+                  Viewer
+                </button>
+                <button 
+                  onClick={() => setNewPartnerRole('admin')}
+                  className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${newPartnerRole === 'admin' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500'}`}
+                >
+                  Admin Helper
+                </button>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 px-1">Global Theme Color</label>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-                  {themeColors.map(color => (
-                    <button
-                      key={color}
-                      onClick={() => onUpdateConfig({ themeColor: color })}
-                      className={`h-12 w-full rounded-2xl transition-all border-4 ${config.themeColor === color ? 'border-white scale-110 shadow-xl z-10' : 'border-transparent opacity-60 hover:opacity-100'} 
-                        ${getThemeBg(color)}`}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 px-1">Custom Brand Logo</label>
-                <div className="flex items-center gap-6 p-6 bg-slate-900/50 rounded-3xl border border-white/5">
-                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center border-2 border-white/5 overflow-hidden ${config.appLogo ? 'bg-white' : 'bg-slate-800'}`}>
-                    {logoPreview ? (
-                      <img src={logoPreview} alt="Preview" className="w-full h-full object-contain" />
-                    ) : (
-                      <ImageIcon className="w-8 h-8 text-slate-700" />
-                    )}
-                  </div>
-                  <div className="space-y-3">
-                    <button 
-                      onClick={() => logoInputRef.current?.click()}
-                      className="px-6 py-3 bg-white/10 text-white text-xs font-black uppercase rounded-xl hover:bg-white/20 transition-all block w-full text-center"
-                    >
-                      Change Image
-                    </button>
-                    <button 
-                      onClick={() => { setLogoPreview(null); onUpdateConfig({ appLogo: undefined }); }}
-                      className="px-6 py-3 bg-red-500/10 text-red-500 text-[10px] font-black uppercase rounded-xl hover:bg-red-500/20 transition-all block w-full text-center"
-                    >
-                      Reset Default
-                    </button>
-                    <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-                  </div>
-                </div>
-              </div>
+              <button onClick={handleAddPartner} className="w-full py-5 bg-indigo-600 text-white font-black rounded-[2rem] shadow-xl">Confirm Partner</button>
             </div>
           </div>
-
-          <div className="space-y-6">
-            <div className="glass p-10 rounded-[3rem] border border-white/5">
-              <h3 className="text-xl font-black text-white mb-6">Visual Preview</h3>
-              <div className="p-8 rounded-[2rem] bg-slate-900/50 border border-white/10 text-center space-y-6">
-                <div className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center shadow-lg ${getThemeBg(config.themeColor)}`}>
-                  {logoPreview ? (
-                    <img src={logoPreview} alt="Preview" className="w-10 h-10 object-contain" />
-                  ) : (
-                    <Zap className="w-8 h-8 text-white fill-white" />
-                  )}
-                </div>
-                <div>
-                  <h4 className="text-xl font-black text-white uppercase tracking-tighter">{tempAppName}</h4>
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1 italic">Professional Instance</p>
-                </div>
-                <div className="h-px bg-white/5 w-full" />
-                <p className="text-xs text-slate-500 leading-relaxed px-4">Your branding will appear on headers, lock screens, and reports.</p>
+          <div className="space-y-4">
+            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-4">Authorized Registry</h4>
+            {config.partners.map(p => (
+              <div key={p.id} className="glass p-6 rounded-[2rem] border border-white/5 flex justify-between items-center">
+                 <div className="flex items-center gap-4">
+                    <div className="bg-white/5 p-3 rounded-xl"><Users className="w-5 h-5 text-indigo-400" /></div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-black text-white">{p.id}</p>
+                        <span className={`px-2 py-0.5 rounded text-[7px] font-black uppercase ${p.role === 'admin' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-slate-700 text-slate-400'}`}>
+                          {p.role}
+                        </span>
+                      </div>
+                      <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest">Active Connection</p>
+                    </div>
+                 </div>
+                 <button onClick={() => onUpdateConfig({ partners: config.partners.filter(u => u.id !== p.id) })} className="p-3 text-red-500/40 hover:text-red-500 transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                 </button>
               </div>
-            </div>
+            ))}
           </div>
         </div>
       )}
 
       {activeTab === 'units' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 animate-in fade-in slide-in-from-bottom-4">
-          <div className="glass p-10 rounded-[3rem] border border-white/5 h-fit">
-            <h3 className="text-2xl font-black text-white mb-8 flex items-center gap-3">
-              <Plus className="w-6 h-6 text-indigo-500" /> Add New Unit
-            </h3>
-            <form onSubmit={handleAdd} className="space-y-5">
-              <input required type="text" placeholder="Unit Name (e.g. Room 101)" value={newRoomName} onChange={(e) => setNewRoomName(e.target.value)} className="w-full px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl text-white font-bold" />
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                   <label className="text-[9px] font-black text-slate-600 uppercase mb-2 block">Opening Unit</label>
-                   <input type="number" value={initialReading} onChange={(e) => setInitialReading(Number(e.target.value))} className="w-full px-4 py-3 bg-slate-900 border border-white/5 rounded-xl text-white font-bold" />
-                </div>
-                <div>
-                   <label className="text-[9px] font-black text-slate-600 uppercase mb-2 block">Unit Rate</label>
-                   <input type="number" value={initialRate} onChange={(e) => setInitialRate(Number(e.target.value))} className="w-full px-4 py-3 bg-slate-900 border border-white/5 rounded-xl text-white font-bold" />
-                </div>
-                <div>
-                   <label className="text-[9px] font-black text-slate-600 uppercase mb-2 block">Fixed Charge</label>
-                   <input type="number" value={initialRent} onChange={(e) => setInitialRent(Number(e.target.value))} className="w-full px-4 py-3 bg-slate-900 border border-white/5 rounded-xl text-white font-bold" />
-                </div>
-              </div>
-              <button type="submit" className={`w-full ${getThemeBg(config.themeColor)} text-white py-4 rounded-2xl font-black hover:opacity-90 transition-all shadow-xl`}>Create Entry</button>
-            </form>
-          </div>
-
-          <div className="space-y-4">
-             <h3 className="text-xl font-black text-white px-2">Managed Units</h3>
-             {rooms.map(room => (
-               <div key={room.id} className="glass p-6 rounded-[2rem] border border-white/5 group hover:border-indigo-500/30 transition-all">
-                  <div className="flex justify-between items-start">
-                     <div>
-                        <h4 className="text-lg font-black text-white mb-1">{room.name}</h4>
-                        <div className="flex gap-4 text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                           <span>{config.currencySymbol}{room.defaultUnitRate || 8}/u</span>
-                           <span>{config.currencySymbol}{room.defaultFixedCharge || 500} fix</span>
-                           <span>Last: {room.lastReading}</span>
-                        </div>
-                     </div>
-                     <div className="flex gap-2">
-                        <button onClick={() => { setEditingRoomId(room.id); setEditRoomData(room); }} className="p-3 bg-white/5 rounded-xl text-slate-400 hover:text-indigo-400 transition-colors"><Edit3 className="w-4 h-4" /></button>
-                        <button onClick={() => onDeleteRoom(room.id)} className="p-3 bg-white/5 rounded-xl text-slate-400 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
-                     </div>
-                  </div>
-                  {editingRoomId === room.id && (
-                    <div className="mt-6 pt-6 border-t border-white/10 space-y-4 animate-in slide-in-from-top-2">
-                       <div>
-                          <label className="text-[9px] font-black text-slate-600 uppercase mb-2 block px-1">Unit Name</label>
-                          <input type="text" value={editRoomData.name || ''} onChange={(e) => setEditRoomData(prev => ({ ...prev, name: e.target.value }))} className="w-full bg-slate-900 p-3 rounded-xl text-sm font-bold text-white border border-white/10" placeholder="Room/Shop Name" />
-                       </div>
-                       <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-[9px] font-black text-slate-600 uppercase mb-2 block px-1">Unit Rate</label>
-                            <input type="number" value={editRoomData.defaultUnitRate || 0} onChange={(e) => setEditRoomData(prev => ({ ...prev, defaultUnitRate: Number(e.target.value) }))} className="w-full bg-slate-900 p-3 rounded-xl text-sm font-bold text-white border border-white/10" placeholder="Rate" />
-                          </div>
-                          <div>
-                            <label className="text-[9px] font-black text-slate-600 uppercase mb-2 block px-1">Fixed Charge</label>
-                            <input type="number" value={editRoomData.defaultFixedCharge || 0} onChange={(e) => setEditRoomData(prev => ({ ...prev, defaultFixedCharge: Number(e.target.value) }))} className="w-full bg-slate-900 p-3 rounded-xl text-sm font-bold text-white border border-white/10" placeholder="Fixed" />
-                          </div>
-                       </div>
-                       <div className="flex gap-2 pt-2">
-                          <button onClick={handleSaveEdit} className={`flex-1 ${getThemeBg(config.themeColor)} text-white py-3 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2`}>
-                            <Save className="w-3.5 h-3.5" /> Save Changes
-                          </button>
-                          <button onClick={() => setEditingRoomId(null)} className="flex-1 bg-slate-800 text-slate-400 py-3 rounded-xl text-xs font-black uppercase">Cancel</button>
-                       </div>
-                    </div>
-                  )}
-               </div>
-             ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'ledger' && (
-        <div className="animate-in fade-in slide-in-from-bottom-4">
-          <HistoryList title="Master Transaction Log" records={records} isAdmin={true} onDeleteRecord={onDeleteRecord} />
-        </div>
-      )}
-
-      {activeTab === 'security' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 animate-in fade-in slide-in-from-bottom-4">
-          <div className="space-y-10">
-            <div className="glass p-10 rounded-[3rem] border border-white/5">
-              <h3 className="text-2xl font-black text-white mb-8 flex items-center gap-3">
-                <Key className="w-6 h-6 text-amber-500" /> System Authentication
-              </h3>
-              <form className="space-y-6">
-                <input required type="password" placeholder="Existing Key" className="w-full px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl text-white font-bold" />
-                <input required type="password" placeholder="New System Key" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl text-white font-bold" />
-                <input required type="password" placeholder="Confirm New Key" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full px-6 py-4 bg-slate-900 border border-white/5 rounded-2xl text-white font-bold" />
-                {securityMsg && <p className={`text-[10px] font-black uppercase p-3 rounded-xl text-center ${securityMsg.type === 'success' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>{securityMsg.text}</p>}
-                <button type="button" className={`w-full ${getThemeBg(config.themeColor)} text-white py-4 rounded-2xl font-black hover:opacity-90 transition-all shadow-xl`}>Update Access Key</button>
-              </form>
-            </div>
-
-            <div className="glass p-10 rounded-[3rem] border border-white/5">
-              <h3 className="text-2xl font-black text-white mb-6 flex items-center gap-3">
-                <Smartphone className="w-6 h-6 text-indigo-400" /> Biometric Link
-              </h3>
-              <p className="text-sm text-slate-500 mb-8 font-medium">Use your system hardware (FaceID / Fingerprint) for rapid authentication.</p>
-              
-              {isBioSupported ? (
-                <button 
-                  onClick={toggleBiometrics}
-                  className={`w-full py-6 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-4 border-2 ${isBioEnabled ? 'bg-red-500/5 border-red-500/20 text-red-500 hover:bg-red-500/10' : `${getThemeBg(config.themeColor)} border-transparent text-white hover:opacity-90 shadow-xl`}`}
-                >
-                  {isBioEnabled ? (
-                    <>
-                      <Trash2 className="w-6 h-6" /> Unlink Biometrics
-                    </>
-                  ) : (
-                    <>
-                      <Fingerprint className="w-6 h-6" /> Setup TouchID / FaceID
-                    </>
-                  )}
-                </button>
-              ) : (
-                <div className="p-6 bg-slate-900/50 border border-dashed border-white/10 rounded-2xl text-center">
-                  <ScanFace className="w-8 h-8 text-slate-700 mx-auto mb-3" />
-                  <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Not supported on this device</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="glass p-10 rounded-[3rem] border border-white/5">
-              <h3 className="text-xl font-black text-white mb-6">Database Portability</h3>
-              <div className="flex gap-4">
-                <button onClick={() => {
-                  const data = storage.exportVault();
-                  if (!data) return;
-                  const blob = new Blob([data], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url; a.download = 'vault_export.volt'; a.click();
-                }} className="flex-1 flex flex-col items-center gap-3 p-6 bg-slate-900 border border-white/5 rounded-[2rem] hover:border-indigo-500 transition-all">
-                  <Download className="w-8 h-8 text-indigo-400" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Export</span>
-                </button>
-                <button onClick={() => fileInputRef.current?.click()} className="flex-1 flex flex-col items-center gap-3 p-6 bg-slate-900 border border-white/5 rounded-[2rem] hover:border-emerald-500 transition-all">
-                  <Upload className="w-8 h-8 text-emerald-400" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Import</span>
-                  <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => {
-                    const f = e.target.files?.[0]; if(!f) return;
-                    const r = new FileReader(); r.onload = (ev) => {
-                      try { storage.importVault(ev.target?.result as string); window.location.reload(); }
-                      catch(e) { alert("Invalid import."); }
-                    }; r.readAsText(f);
-                  }} />
-                </button>
-              </div>
-            </div>
-
-            {onInstallApp && (
-              <div className="glass p-10 rounded-[3rem] border border-white/5">
-                <h3 className="text-xl font-black text-white mb-6 flex items-center gap-3">
-                  <InstallIcon className="w-5 h-5 text-indigo-400" /> App Installation
-                </h3>
-                <p className="text-sm text-slate-500 mb-6 font-medium">Download this app for quick access and offline use.</p>
-                <button 
-                  onClick={onInstallApp}
-                  className={`w-full py-4 ${getThemeBg(config.themeColor)} text-white rounded-2xl font-black hover:opacity-90 transition-all shadow-xl flex items-center justify-center gap-2`}
-                >
-                  <Download className="w-4 h-4" /> Install App Now
-                </button>
+        <div className="glass p-10 rounded-[3rem] border border-white/5 h-fit">
+          <div className="flex justify-between items-center mb-8">
+            <h3 className="text-2xl font-black text-white italic">Meter Registry</h3>
+            {isRestricted && (
+              <div className="flex items-center gap-2 text-slate-500 text-[8px] font-black uppercase">
+                <Lock className="w-3 h-3" /> Read Only
               </div>
             )}
-
-            <div className="p-8 border-2 border-dashed border-red-500/20 rounded-[2.5rem] bg-red-500/[0.02] flex flex-col items-center gap-4">
-               <div className="flex items-center gap-2 text-red-500 text-sm font-black uppercase tracking-widest">
-                 <AlertTriangle className="w-4 h-4" /> Danger Zone
-               </div>
-               <button onClick={() => {
-                 if(window.confirm("FINAL WARNING: Wipe all local data?")) {
-                   storage.clearAll(); window.location.reload();
-                 }
-               }} className="w-full py-4 text-[10px] font-black uppercase tracking-[0.2em] text-red-500/40 hover:text-red-500 hover:bg-red-500/5 rounded-xl transition-all border border-red-500/10">System Wipe</button>
-            </div>
           </div>
+          <div className="space-y-2">
+            {rooms.map(room => (
+              <div key={room.id} className="flex justify-between items-center p-6 bg-white/5 rounded-3xl border border-white/5 group hover:border-indigo-500/20 transition-all">
+                <div>
+                  <p className="font-black text-white text-lg">{room.name}</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Base Value: {room.lastReading} Units</p>
+                </div>
+                {!isRestricted && (
+                  <button onClick={() => onDeleteRoom(room.id)} className="p-3 text-slate-700 hover:text-red-500 transition-colors rounded-xl hover:bg-red-500/5">
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          
+          {!isRestricted && (
+            <div className="mt-8">
+              {isAddingMeter ? (
+                <div className="p-6 bg-indigo-600/5 rounded-[2.5rem] border border-indigo-500/20 space-y-4 animate-in zoom-in-95 duration-200">
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-black text-indigo-400 uppercase tracking-widest ml-4">Meter Point Name</label>
+                    <input 
+                      autoFocus
+                      type="text" 
+                      placeholder="e.g. Second Floor" 
+                      value={newMeterName} 
+                      onChange={(e) => setNewMeterName(e.target.value)}
+                      className="w-full px-6 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white font-bold outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-black text-indigo-400 uppercase tracking-widest ml-4">Initial Reading</label>
+                    <input 
+                      type="number" 
+                      placeholder="0" 
+                      value={newMeterInitial} 
+                      onChange={(e) => setNewMeterInitial(Number(e.target.value))}
+                      className="w-full px-6 py-4 bg-slate-950 border border-white/5 rounded-2xl text-white font-bold outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={handleCreateMeter}
+                      className="flex-grow py-4 bg-indigo-600 text-white font-black rounded-2xl flex items-center justify-center gap-2"
+                    >
+                      <Check className="w-4 h-4" /> Save Meter
+                    </button>
+                    <button 
+                      onClick={() => setIsAddingMeter(false)}
+                      className="px-6 py-4 bg-slate-800 text-slate-400 font-black rounded-2xl flex items-center justify-center gap-2"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button 
+                  onClick={() => setIsAddingMeter(true)} 
+                  className="w-full py-5 bg-white/5 border border-white/10 text-white font-black rounded-[2rem] hover:bg-white/10 transition-all flex items-center justify-center gap-3 active:scale-95"
+                >
+                  <Plus className="w-5 h-5" /> New Metering Unit
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

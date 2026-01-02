@@ -21,16 +21,28 @@ export interface BillingRecord {
   totalAmount: number;
   date: string;
   aiInsight?: string;
+  isRentOnly?: boolean;
+  status?: 'paid' | 'pending';
+}
+
+export interface PartnerAccess {
+  id: string;
+  name: string;
+  pin: string;
+  role: 'admin' | 'viewer';
 }
 
 export interface AdminConfig {
-  adminPassword: string;
+  userId: string;
+  pin: string;
+  recoveryEmail: string;
+  masterKey: string; // Used for OTP simulation
   isVaultInitialized: boolean;
   currencySymbol?: string;
-  securityHint?: string;
   appName?: string;
-  appLogo?: string; // Base64 Data URL
   themeColor?: 'indigo' | 'rose' | 'emerald' | 'amber' | 'violet' | 'cyan';
+  partners: PartnerAccess[];
+  googleSheetUrl?: string;
 }
 
 export interface EncryptedVault {

@@ -1,12 +1,17 @@
 
 import { AdminConfig } from './types';
 
+// Corrected DEFAULT_CONFIG to match the AdminConfig interface by removing 'adminPassword' and adding missing required fields.
 export const DEFAULT_CONFIG: AdminConfig = {
-  adminPassword: 'admin',
+  userId: '',
+  pin: '',
+  recoveryEmail: '',
+  masterKey: '',
   isVaultInitialized: false,
   appName: 'VOLTCALC',
   themeColor: 'indigo',
-  currencySymbol: 'RS'
+  currencySymbol: 'RS',
+  partners: []
 };
 
 export const STORAGE_KEYS = {

@@ -1,20 +1,18 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# ⚡ VoltCalc Deployment Fix
 
-# Run and deploy your AI Studio app
+If you are seeing a blank screen, follow these steps exactly:
 
-This contains everything you need to run your app locally.
+### 🚀 HOW TO DEPLOY CORRECTLY
+1.  **Download all files** into a clean folder on your desktop.
+2.  Go to **[Netlify Drop](https://app.netlify.com/drop)**.
+3.  **DO NOT** upload individual files. Select the **ENTIRE FOLDER** and drag it into the upload box.
+4.  Once uploaded, click the generated link. It should show "⚡ STARTING SECURE VAULT..." for a moment before loading.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1fyWYteVsMmp9-jpTvaXjBDDR3EYQEmXd
+### ❓ WHY THE BLANK SCREEN?
+The browser needs to load `index.tsx` as a "module". My updated `index.html` includes a new "Import Map" that tells the browser where to find React. This fixes the common Netlify/Vercel white screen issue.
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### 🧮 CALCULATION FORMULA
+- **C** = Current Meter Reading (What you see on the meter now)
+- **P** = Previous Meter Reading (What was recorded last time)
+- **Units Used** = C - P
+- **Total** = (Units × Rate) + Rent + Arrears
